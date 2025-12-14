@@ -1,50 +1,93 @@
 import streamlit as st
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from huggingface_hub import InferenceClient
+from github import Github
+import json
 import torch
 
 # ==========================================
-# PART 1: BACKEND LOGIC (AI & SCORING)
+# PART 1: FRONTEND CONFIG & CSS
+# ==========================================
+
+st.set_page_config(
+    page_title="AI Chinese Essay Grader",
+    page_icon="🎓",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS (Awesome UI + Dark Text Fix)
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+    
+    .main { background-color: #F8F9FA; font-family: 'Noto Sans TC', sans-serif; }
+    
+    /* FIX: Force Input Text Color to Dark Grey */
+    .stTextArea textarea {
+        background-color: #FFFFFF !important;
+        color: #333333 !important;
+        caret-color: #333333;
+        border-radius: 12px;
+        border: 2px solid #E0E0E0;
+        padding: 15px;
+        font-size: 16px;
+        font-family: "KaiTi", "SimKai", "Serif";
+    }
+    .stTextArea textarea:focus { border-color: #3498DB; box-shadow: 0 0 0 2px rgba(52,152,219,0.2); }
+    
+    /* Score Card */
+    .score-card {
+        background: white; border-radius: 15px; padding: 25px;
+        text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        height: 100%; display: flex; flex-direction: column;
+        justify-content: center; align-items: center;
+    }
+    .score-value { font-size: 4.5rem; font-weight: 800; color: #2C3E50; margin: 10px 0; line-height: 1; }
+    .score-label { font-size: 1.2rem; font-weight: 600; padding: 5px 15px; border-radius: 20px; color: white; }
+
+    /* Feedback Box */
+    .feedback-box {
+        background: white; border-radius: 15px; padding: 25px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 5px solid #3498DB;
+        height: 100%;
+    }
+    
+    /* Header & Buttons */
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #2C3E50; text-align: center; margin-top: -20px; }
+    .sub-header { font-size: 1.1rem; color: #7F8C8D; text-align: center; margin-bottom: 2rem; }
+    .stButton>button {
+        width: 100%; border-radius: 30px;
+        background: linear-gradient(135deg, #3498DB 0%, #2980B9 100%);
+        color: white; border: none; padding: 12px 0; font-weight: bold; font-size: 18px;
+    }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(52,152,219,0.3); }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# PART 2: BACKEND LOGIC
 # ==========================================
 
 @st.cache_resource
 def load_scoring_pipeline():
-    """
-    Loads the fine-tuned BERT model for scoring.
-    Forces CPU (device=-1) to prevent memory crashes on Streamlit Cloud.
-    """
+    """Load BERT model locally (CPU optimized)."""
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     try:
-        # Load tokenizer and model explicitly
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        # device=-1 ensures CPU usage
         return pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
     except Exception as e:
         st.error(f"⚠️ Scoring Model Error: {e}")
         return None
 
 def calculate_weighted_score(predictions):
-    """
-    Calculates a precise 0-100 score based on the probability of all labels.
-    Handles Simplified, Traditional, and English labels.
-    """
-    # WEIGHT MAPPING
-    # Based on your training code: 0=不及格, 1=良好, 2=优秀
+    """Calculate 0-100 score with multi-language support."""
     label_weights = {
-        # --- Simplified Chinese (From your Training Code) ---
-        "不及格": 45,
-        "良好": 75,
-        "优秀": 95,
-        
-        # --- Traditional Chinese (Fallback) ---
-        "需改進": 45,
-        "優秀": 95,
-        
-        # --- English / System Labels (Fallback) ---
-        "Needs Improvement": 45, "LABEL_0": 45,
-        "Good": 75,              "LABEL_1": 75,
-        "Excellent": 95,         "LABEL_2": 95
+        "不及格": 45, "Needs Improvement": 45, "LABEL_0": 45,
+        "良好": 75, "Good": 75, "LABEL_1": 75,
+        "優秀": 95, "Excellent": 95, "LABEL_2": 95,
+        "优秀": 95 # Simplified Chinese support
     }
 
     weighted_score = 0
@@ -53,219 +96,205 @@ def calculate_weighted_score(predictions):
     for p in predictions:
         l = p['label']
         c = p['score']
-        
-        # Check if any key from our weights is inside the model label
-        # e.g. If model says "优秀", it matches key "优秀"
         for key, val in label_weights.items():
             if key in l:
                 weighted_score += (val * c)
                 total_confidence += c
                 break
     
-    # Safety check: If total_confidence is 0 (no match found), fallback to raw label
-    if total_confidence == 0:
-        return 0, "Error (Label Mismatch)", "#999"
+    if total_confidence == 0: return 0, "Error", "#999"
 
     final_score = int(weighted_score)
     
-    # Determine Display Level
-    # (Thresholds aligned with your training logic: >80 is Excellent)
     if final_score >= 85:
-        level = "Excellent (優秀)"
-        color = "#2ECC71" # Green
+        return final_score, "Excellent (優秀)", "#2ECC71" # Green
     elif final_score >= 60:
-        level = "Good (良好)"
-        color = "#F39C12" # Orange
+        return final_score, "Good (良好)", "#F39C12" # Orange
     else:
-        level = "Needs Improvement (需改進)"
-        color = "#E74C3C" # Red
-        
-    return final_score, level, color
+        return final_score, "Needs Improvement (需改進)", "#E74C3C" # Red
 
 def generate_feedback(essay, score, level, hf_token):
-    """
-    Generates qualitative feedback using Qwen2.5-72B via API.
-    """
-    if not hf_token:
-        return "⚠️ Token missing. Please add your Hugging Face token."
-
-    # Use 72B model for best Chinese performance via API
-    model_id = "Qwen/Qwen2.5-72B-Instruct"
-    client = InferenceClient(model=model_id, token=hf_token)
-
+    """Generate feedback using Qwen-72B via API."""
+    if not hf_token: return "⚠️ Token missing. Please add your Hugging Face token."
+    
+    client = InferenceClient(model="Qwen/Qwen2.5-72B-Instruct", token=hf_token)
     prompt = f"""
-    You are an experienced Chinese teacher (Traditional Chinese).
-    
-    **Task:** Grade this Primary Student's essay.
-    **Student Essay:** "{essay}"
-    **Calculated Score:** {score}/100 ({level})
-    
-    **Instructions:**
-    1. **Tone:** Encouraging but educational.
-    2. **Structure:**
-       - 🌟 **Highlights:** 1 sentence on what is good.
-       - 💡 **Suggestion:** 1 specific tip to improve 'Show, Don't Tell'.
-       - ✍️ **Correction:** Correct one specific vocabulary mistake.
-    3. **Language:** Traditional Chinese (繁體中文).
-    4. **Length:** Keep it concise (under 150 words).
+    Role: Experienced Chinese teacher.
+    Task: Grade this Primary Student essay.
+    Essay: "{essay}"
+    Score: {score}/100 ({level})
+    Instructions:
+    1. Tone: Encouraging.
+    2. Format: 🌟 Highlights (1 sentence), 💡 Suggestion (1 tip for 'Show Don't Tell'), ✍️ Correction (fix 1 vocab).
+    3. Language: Traditional Chinese.
+    4. Length: Under 150 words.
     """
-
     try:
-        messages = [{"role": "user", "content": prompt}]
-        response = client.chat_completion(messages, max_tokens=500, temperature=0.7)
-        return response.choices[0].message.content
+        msg = [{"role": "user", "content": prompt}]
+        res = client.chat_completion(msg, max_tokens=500, temperature=0.7)
+        return res.choices[0].message.content
     except Exception as e:
         return f"⚠️ Feedback Error: {str(e)}"
 
+def save_to_github(essay, score, level, correction):
+    """Saves teacher feedback to a JSON file in YOUR GitHub Repo."""
+    
+    # --- CONFIGURATION: CHANGE THIS! ---
+    REPO_NAME = "your-github-username/your-repo-name" 
+    # Example: "MirandaZhao/essay-grader-app"
+    
+    if 'GITHUB_TOKEN' not in st.secrets:
+        st.error("Missing GITHUB_TOKEN in Secrets.")
+        return False
+
+    g = Github(st.secrets["GITHUB_TOKEN"])
+    try:
+        repo = g.get_repo(REPO_NAME)
+        file_path = "data/feedback.json"
+        
+        try:
+            contents = repo.get_contents(file_path)
+            existing_data = json.loads(contents.decoded_content.decode())
+        except:
+            existing_data = [] # Create new if missing
+            
+        new_entry = {
+            "essay": essay,
+            "ai_score": score,
+            "ai_level": level,
+            "teacher_correction": correction
+        }
+        existing_data.append(new_entry)
+        
+        updated_content = json.dumps(existing_data, indent=2, ensure_ascii=False)
+        
+        if 'contents' in locals():
+            repo.update_file(file_path, "Add feedback", updated_content, contents.sha)
+        else:
+            repo.create_file(file_path, "Init database", updated_content)
+            
+        return True
+    except Exception as e:
+        st.error(f"GitHub Error: {e}")
+        return False
 
 # ==========================================
-# PART 2: FRONTEND UI (LAYOUT & CSS)
+# PART 3: MAIN APP
 # ==========================================
 
 def main():
-    # 1. Page Config
-    st.set_page_config(
-        page_title="AI Chinese Essay Grader",
-        page_icon="🎓",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-
-    # 2. Custom CSS
-    st.markdown("""
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-        .main { background-color: #F8F9FA; font-family: 'Noto Sans TC', sans-serif; }
-        
-        /* Input Text Styling */
-        .stTextArea textarea {
-            background-color: #FFFFFF !important;
-            color: #333333 !important;
-            caret-color: #333333;
-            border-radius: 12px;
-            border: 2px solid #E0E0E0;
-            padding: 15px;
-            font-size: 16px;
-            font-family: "KaiTi", "SimKai", "Serif";
-        }
-        .stTextArea textarea:focus { border-color: #3498DB; }
-        
-        /* Headers */
-        .main-header { font-size: 2.5rem; font-weight: 700; color: #2C3E50; text-align: center; margin-top: -20px; }
-        .sub-header { font-size: 1.1rem; color: #7F8C8D; text-align: center; margin-bottom: 2rem; }
-
-        /* Score Card */
-        .score-card {
-            background: white; border-radius: 15px; padding: 25px;
-            text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            height: 100%; display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-        }
-        .score-value { font-size: 4.5rem; font-weight: 800; color: #2C3E50; margin: 10px 0; line-height: 1; }
-        .score-label { font-size: 1.2rem; font-weight: 600; padding: 5px 15px; border-radius: 20px; color: white; }
-
-        /* Feedback Box */
-        .feedback-box {
-            background: white; border-radius: 15px; padding: 25px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 5px solid #3498DB;
-            height: 100%;
-        }
-        
-        /* Button */
-        .stButton>button {
-            width: 100%; border-radius: 30px;
-            background: linear-gradient(135deg, #3498DB 0%, #2980B9 100%);
-            color: white; border: none; padding: 12px 0; font-weight: bold; font-size: 18px;
-        }
-        .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(52,152,219,0.3); }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # 3. Sidebar
+    # Sidebar
     with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/3429/3429414.png", width=70)
+        st.image("https://cdn-icons-png.flaticon.com/512/3429/3429414.png", width=80)
         st.markdown("## 👩‍🏫 Teacher's Desk")
-        
         if 'HF_TOKEN' in st.secrets:
             hf_token = st.secrets['HF_TOKEN']
-            st.success("API Token Loaded 🔒")
+            st.success("AI Token Loaded 🔒")
         else:
-            hf_token = st.text_input("Hugging Face Token", type="password")
-            if not hf_token:
-                st.warning("Token needed for feedback.")
+            hf_token = st.text_input("Enter HF Token", type="password")
         
-        st.markdown("---")
-        st.info("**How it works:**\n1. **AI Grading:** BERT (Weights: 45/75/95)\n2. **Feedback:** Qwen-72B")
+        st.info("**System Status:**\n🟢 Scoring (Local)\n🟢 Feedback (Remote)\n🟢 Database (GitHub)")
 
-    # 4. Main Layout
+    # Main Area
     st.markdown('<div class="main-header">🎓 AI Chinese Essay Grader</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Instant Scoring & Personalized Feedback for Hong Kong Students</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Instant Scoring & Personalized Feedback</div>', unsafe_allow_html=True)
 
     essay_text = st.text_area("📝 Paste Student Essay Here:", height=250, placeholder="在此輸入作文...")
     
-    col_btn, _ = st.columns([1, 2])
-    with col_btn:
+    # Buttons
+    col_grade, _ = st.columns([1, 3])
+    with col_grade:
         grade_btn = st.button("✨ Grade Essay")
 
-    # 5. Execution
+    if 'result_generated' not in st.session_state:
+        st.session_state.result_generated = False
+
     if grade_btn:
         if not essay_text.strip():
-            st.toast("⚠️ Please enter an essay first!", icon="🚫")
+            st.toast("⚠️ Input empty!", icon="🚫")
             return
 
         progress_text = st.empty()
         bar = st.progress(0)
 
-        # A: Scoring
+        # 1. Scoring
         scorer = load_scoring_pipeline()
         if scorer:
-            progress_text.text("🧠 Analyzing text structure...")
+            progress_text.text("🧠 Analyzing structure...")
             bar.progress(30)
-            
             try:
-                # Get raw scores
-                predictions = scorer(essay_text, truncation=True, max_length=512, top_k=None)
+                preds = scorer(essay_text, truncation=True, max_length=512, top_k=None)
+                score, level_text, color = calculate_weighted_score(preds)
                 
-                # Weighted Score
-                score, level_text, theme_color = calculate_weighted_score(predictions)
+                # Save to session state so it persists for the feedback button
+                st.session_state.score = score
+                st.session_state.level_text = level_text
+                st.session_state.color = color
+                st.session_state.essay = essay_text
                 
             except Exception as e:
                 st.error(f"Scoring Failed: {e}")
-                bar.empty()
                 return
 
-            # B: Feedback
-            progress_text.text("✍️ Teacher is writing comments...")
+            # 2. Feedback
+            progress_text.text("✍️ Drafting comments...")
             bar.progress(70)
-            
             feedback = generate_feedback(essay_text, score, level_text, hf_token)
+            st.session_state.feedback = feedback
             
             bar.progress(100)
             progress_text.empty()
             bar.empty()
+            st.session_state.result_generated = True
 
-            # C: Display
-            st.markdown("---")
-            c1, c2 = st.columns([1, 2], gap="large")
+    # Display Results (Persist after button click)
+    if st.session_state.result_generated:
+        st.markdown("---")
+        c1, c2 = st.columns([1, 2], gap="large")
 
-            with c1:
-                st.markdown(f"""
-                <div class="score-card" style="border-top: 6px solid {theme_color};">
-                    <div style="color: #888; font-weight: bold; letter-spacing: 1px;">PROFICIENCY</div>
-                    <div class="score-value">{score}</div>
-                    <div class="score-label" style="background-color: {theme_color};">{level_text.split('(')[0]}</div>
+        with c1:
+            st.markdown(f"""
+            <div class="score-card" style="border-top: 6px solid {st.session_state.color};">
+                <div style="color: #888; font-weight: bold;">PROFICIENCY</div>
+                <div class="score-value">{st.session_state.score}</div>
+                <div class="score-label" style="background-color: {st.session_state.color};">{st.session_state.level_text.split('(')[0]}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c2:
+            st.markdown(f"""
+            <div class="feedback-box">
+                <h3 style="margin-top:0; color:#2C3E50;">👩‍🏫 Teacher's Feedback</h3>
+                <div style="color: #555; line-height: 1.6; font-size: 1.1rem;">
+                    {st.session_state.feedback}
                 </div>
-                """, unsafe_allow_html=True)
+            </div>
+            """, unsafe_allow_html=True)
 
-            with c2:
-                st.markdown(f"""
-                <div class="feedback-box">
-                    <h3 style="margin-top:0; color:#2C3E50;">👩‍🏫 Teacher's Feedback</h3>
-                    <div style="color: #555; line-height: 1.6; font-size: 1.1rem;">
-                        {feedback}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+        # --- TEACHER VALIDATION FORM ---
+        st.markdown("---")
+        st.subheader("🧐 Help Improve the AI")
+        
+        with st.form("feedback_form"):
+            st.write(f"The AI graded this as: **{st.session_state.level_text}**")
+            correction = st.radio(
+                "Is this grade correct?",
+                ["✅ Yes, correct", "⚠️ No, should be 'Needs Improvement'", "⚠️ No, should be 'Good'", "⚠️ No, should be 'Excellent'"],
+                horizontal=True
+            )
+            submit_feed = st.form_submit_button("Submit Feedback to Database")
+            
+            if submit_feed:
+                final_label = correction
+                if "Yes" in correction:
+                    final_label = st.session_state.level_text.split('(')[0] # Keep original
+                else:
+                    final_label = correction.replace("⚠️ No, should be ", "").replace("'", "")
+                
+                if save_to_github(st.session_state.essay, st.session_state.score, st.session_state.level_text, final_label):
+                    st.success("✅ Feedback saved to GitHub! The model will learn from this next week.")
+                else:
+                    st.error("❌ Failed to save. Check your GITHUB_TOKEN and Repo Name.")
 
 if __name__ == "__main__":
     main()
