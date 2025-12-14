@@ -1,5 +1,6 @@
 streamlit
-huggingface_hub
+transformers
+torch
+numpy
 pandas
-plotly
-python-dotenv
+scipy
