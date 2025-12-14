@@ -4,26 +4,35 @@ import plotly.express as px
 import requests
 import json
 import time
+import re
 
 # --- Page Config ---
 st.set_page_config(page_title="HK Writing Coach AI", page_icon="📝", layout="wide")
 
-# --- API CONFIGURATION (UPDATED) ---
-# 🔴 OLD: https://api-inference.huggingface.co/models/...
-# 🟢 NEW: https://router.huggingface.co/models/...
+# --- API CONFIGURATION (FIXED) ---
 
-# Pipeline 1: Your Fine-Tuned Model
-API_URL_SCORING = "https://router.huggingface.co/models/MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
+# 🔴 Pipeline 1: Custom User Models MUST use the 'api-inference' URL
+API_URL_SCORING = "https://api-inference.huggingface.co/models/MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
 
-# Pipeline 2: Qwen 2.5 7B (Instruct)
+# 🟢 Pipeline 2: Popular Models (Qwen) work better on the 'router' URL
 API_URL_FEEDBACK = "https://router.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
 
 def query_model(payload, api_url, token):
-    """Sends the text to Hugging Face and returns the JSON response."""
+    """Sends request to HF. Handles non-JSON errors gracefully."""
     headers = {"Authorization": f"Bearer {token}"}
     try:
         response = requests.post(api_url, headers=headers, json=payload)
+        
+        # 1. Handle HTTP Errors (404, 500, 503)
+        if response.status_code != 200:
+            return {"error": f"Status {response.status_code}: {response.text}"}
+            
+        # 2. Try to decode JSON
         return response.json()
+        
+    except json.JSONDecodeError:
+        # This catches the "line 1 column 1" error
+        return {"error": f"Invalid API Response (Not JSON). Raw output: {response.text[:200]}..."}
     except Exception as e:
         return {"error": f"Connection Error: {str(e)}"}
 
@@ -52,7 +61,7 @@ with col1:
     st.subheader("Student Submission")
     st.info("Genre Locked: Narrative (記叙文)")
     
-    tab_text, tab_debug = st.tabs(["⌨️ Essay Content", "🛠️ Debug Raw Output"])
+    tab_text, tab_debug = st.tabs(["⌨️ Essay Content", "🛠️ Debug"])
     
     essay_text = ""
     if "analyze_clicked" not in st.session_state:
@@ -71,11 +80,11 @@ if st.session_state.analyze_clicked:
     if not essay_text: essay_text = text_input
     
     if not hf_token:
-        st.error("❌ Please provide a Hugging Face API Token to run the models.")
+        st.error("❌ Please provide a Hugging Face API Token.")
     else:
         # --- PIPELINE 1: SCORING ---
-        with st.spinner("Pipeline 1: Running Fine-Tuned Scoring Model..."):
-            # Payload for scoring
+        with st.spinner("Pipeline 1: Scoring (This might take 30s)..."):
+            # Note: We ask for 'return_full_text': False to just get new tokens
             scoring_payload = {
                 "inputs": f"Score this narrative essay (0-100):\n{essay_text}",
                 "parameters": {"max_new_tokens": 50, "temperature": 0.1, "return_full_text": False}
@@ -83,64 +92,57 @@ if st.session_state.analyze_clicked:
             raw_score_response = query_model(scoring_payload, API_URL_SCORING, hf_token)
 
         # --- PIPELINE 2: FEEDBACK ---
-        with st.spinner("Pipeline 2: Qwen is analyzing for feedback..."):
-            # Payload for feedback
+        with st.spinner("Pipeline 2: Generating Feedback..."):
             feedback_payload = {
-                "inputs": f"<|im_start|>system\nYou are a strict writing coach.<|im_end|>\n<|im_start|>user\nReview this narrative essay. Provide 3 specific improvements.\n\nEssay:\n{essay_text}<|im_end|>\n<|im_start|>assistant\n",
+                "inputs": f"<|im_start|>system\nYou are a writing coach.<|im_end|>\n<|im_start|>user\nReview this essay. Provide 3 tips.\n\nEssay:\n{essay_text}<|im_end|>\n<|im_start|>assistant\n",
                 "parameters": {"max_new_tokens": 512, "temperature": 0.7, "return_full_text": False}
             }
             raw_feedback_response = query_model(feedback_payload, API_URL_FEEDBACK, hf_token)
 
-        # --- PROCESS & DISPLAY REAL DATA ---
+        # --- PROCESS & DISPLAY ---
         
-        # 1. Check for API Errors (Model Loading / Auth Error)
-        if isinstance(raw_score_response, dict) and "error" in raw_score_response:
-            st.error(f"Pipeline 1 Error: {raw_score_response['error']}")
-            st.warning("Note: Custom models on Hugging Face 'sleep' when not used. Wait 30s and try again.")
-        elif isinstance(raw_feedback_response, dict) and "error" in raw_feedback_response:
-            st.error(f"Pipeline 2 Error: {raw_feedback_response['error']}")
-        else:
-            # 2. Parse Real Data
+        # 1. Check for Errors
+        p1_error = isinstance(raw_score_response, dict) and "error" in raw_score_response
+        p2_error = isinstance(raw_feedback_response, dict) and "error" in raw_feedback_response
+
+        if p1_error:
+            st.error(f"Pipeline 1 Failed: {raw_score_response['error']}")
+            # Fallback if model is loading (Common on Free Tier)
+            if "loading" in str(raw_score_response.get('error', '')).lower():
+                st.warning("⏳ The Scoring Model is waking up. Please click 'Analyze' again in 30 seconds.")
+        
+        if p2_error:
+            st.error(f"Pipeline 2 Failed: {raw_feedback_response['error']}")
+
+        if not p1_error and not p2_error:
+            # 2. Parse Data
             try:
-                # Parsing Pipeline 1 (Scoring)
-                score_text = raw_score_response[0]['generated_text'] if isinstance(raw_score_response, list) else str(raw_score_response)
-                
-                # Attempt to extract a number from the text
-                import re
-                numbers = re.findall(r'\d+', score_text)
+                # Get text from list or dict
+                score_out = raw_score_response[0]['generated_text'] if isinstance(raw_score_response, list) else str(raw_score_response)
+                feedback_out = raw_feedback_response[0]['generated_text'] if isinstance(raw_feedback_response, list) else str(raw_feedback_response)
+
+                # Extract Number
+                numbers = re.findall(r'\d+', score_out)
                 final_score = int(numbers[0]) if numbers else 0
                 
-                # Parsing Pipeline 2 (Feedback)
-                feedback_text = raw_feedback_response[0]['generated_text'] if isinstance(raw_feedback_response, list) else str(raw_feedback_response)
-
-                # Display Results
-                st.success("✅ Real Analysis Complete")
+                # Show Results
+                st.success("Analysis Complete")
                 
                 m1, m2 = st.columns([1, 2])
                 with m1:
-                    st.metric("AI Score", f"{final_score} / 100")
-                    st.caption("Score extracted from Fine-Tuned Model")
-                
+                    st.metric("Score", f"{final_score}/100")
                 with m2:
-                    st.subheader("Coach Feedback (Qwen)")
-                    st.write(feedback_text)
-                    
-                # Visualization
+                    st.subheader("Coach Feedback")
+                    st.write(feedback_out)
+                
                 if final_score > 0:
-                    df = pd.DataFrame({
-                        'Metric': ['Holistic Score', 'Language Flow', 'Narrative Structure'],
-                        'Value': [final_score, final_score, final_score] 
-                    })
-                    fig = px.bar(df, x='Metric', y='Value', range_y=[0,100])
-                    st.plotly_chart(fig, use_container_width=True)
+                    df = pd.DataFrame({'Metric': ['Score', 'Content', 'Grammar'], 'Value': [final_score, final_score, final_score]})
+                    st.plotly_chart(px.bar(df, x='Metric', y='Value', range_y=[0,100]), use_container_width=True)
 
             except Exception as e:
-                st.error(f"Error parsing model output: {e}")
-                st.warning("Check the 'Debug Raw Output' tab to see what the model actually returned.")
+                st.error(f"Parsing Error: {e}")
 
-        # --- Debug Tab (For Transparency) ---
+        # Debug Tab
         with tab_debug:
-            st.write("### Pipeline 1 Raw Response (Scoring)")
-            st.json(raw_score_response)
-            st.write("### Pipeline 2 Raw Response (Feedback)")
-            st.json(raw_feedback_response)
+            st.write("Scoring Raw:", raw_score_response)
+            st.write("Feedback Raw:", raw_feedback_response)
