@@ -15,6 +15,7 @@ def load_scoring_pipeline():
     """
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     try:
+        # Load tokenizer and model explicitly
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         # device=-1 ensures CPU usage
@@ -26,12 +27,24 @@ def load_scoring_pipeline():
 def calculate_weighted_score(predictions):
     """
     Calculates a precise 0-100 score based on the probability of all labels.
+    Handles Simplified, Traditional, and English labels.
     """
-    # Define score mapping for English and Chinese labels
+    # WEIGHT MAPPING
+    # Based on your training code: 0=不及格, 1=良好, 2=优秀
     label_weights = {
-        "不及格": 45, "Needs Improvement": 45, "LABEL_0": 45,
-        "良好": 75, "Good": 75, "LABEL_1": 75,
-        "優秀": 95, "Excellent": 95, "LABEL_2": 95
+        # --- Simplified Chinese (From your Training Code) ---
+        "不及格": 45,
+        "良好": 75,
+        "优秀": 95,
+        
+        # --- Traditional Chinese (Fallback) ---
+        "需改進": 45,
+        "優秀": 95,
+        
+        # --- English / System Labels (Fallback) ---
+        "Needs Improvement": 45, "LABEL_0": 45,
+        "Good": 75,              "LABEL_1": 75,
+        "Excellent": 95,         "LABEL_2": 95
     }
 
     weighted_score = 0
@@ -41,16 +54,22 @@ def calculate_weighted_score(predictions):
         l = p['label']
         c = p['score']
         
-        # Fuzzy match the label key
+        # Check if any key from our weights is inside the model label
+        # e.g. If model says "优秀", it matches key "优秀"
         for key, val in label_weights.items():
             if key in l:
                 weighted_score += (val * c)
                 total_confidence += c
                 break
     
+    # Safety check: If total_confidence is 0 (no match found), fallback to raw label
+    if total_confidence == 0:
+        return 0, "Error (Label Mismatch)", "#999"
+
     final_score = int(weighted_score)
     
-    # Determine Level Label
+    # Determine Display Level
+    # (Thresholds aligned with your training logic: >80 is Excellent)
     if final_score >= 85:
         level = "Excellent (優秀)"
         color = "#2ECC71" # Green
@@ -112,115 +131,61 @@ def main():
         initial_sidebar_state="expanded"
     )
 
-    # 2. Custom CSS (Fixed White Input Bug)
+    # 2. Custom CSS
     st.markdown("""
         <style>
-        /* Import Font */
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-
-        .main {
-            background-color: #F8F9FA;
-            font-family: 'Noto Sans TC', sans-serif;
-        }
+        .main { background-color: #F8F9FA; font-family: 'Noto Sans TC', sans-serif; }
         
-        /* FIX: Force Input Text Color to Dark Grey */
+        /* Input Text Styling */
         .stTextArea textarea {
             background-color: #FFFFFF !important;
-            color: #333333 !important; /* Fixes white-on-white text */
-            caret-color: #333333; /* Fixes invisible cursor */
+            color: #333333 !important;
+            caret-color: #333333;
             border-radius: 12px;
             border: 2px solid #E0E0E0;
             padding: 15px;
             font-size: 16px;
             font-family: "KaiTi", "SimKai", "Serif";
         }
-        .stTextArea textarea:focus {
-            border-color: #3498DB;
-            box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
-        }
-        /* Fix placeholder color */
-        .stTextArea textarea::placeholder {
-            color: #888888;
-        }
-
-        /* Header Styling */
-        .main-header {
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: #2C3E50;
-            text-align: center;
-            margin-top: -20px;
-        }
-        .sub-header {
-            font-size: 1.1rem;
-            color: #7F8C8D;
-            text-align: center;
-            margin-bottom: 2rem;
-        }
+        .stTextArea textarea:focus { border-color: #3498DB; }
+        
+        /* Headers */
+        .main-header { font-size: 2.5rem; font-weight: 700; color: #2C3E50; text-align: center; margin-top: -20px; }
+        .sub-header { font-size: 1.1rem; color: #7F8C8D; text-align: center; margin-bottom: 2rem; }
 
         /* Score Card */
         .score-card {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
+            background: white; border-radius: 15px; padding: 25px;
+            text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            height: 100%; display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
         }
-        .score-value {
-            font-size: 4.5rem;
-            font-weight: 800;
-            color: #2C3E50;
-            margin: 10px 0;
-            line-height: 1;
-        }
-        .score-label {
-            font-size: 1.2rem;
-            font-weight: 600;
-            padding: 5px 15px;
-            border-radius: 20px;
-            color: white;
-        }
+        .score-value { font-size: 4.5rem; font-weight: 800; color: #2C3E50; margin: 10px 0; line-height: 1; }
+        .score-label { font-size: 1.2rem; font-weight: 600; padding: 5px 15px; border-radius: 20px; color: white; }
 
         /* Feedback Box */
         .feedback-box {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            border-left: 5px solid #3498DB;
+            background: white; border-radius: 15px; padding: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 5px solid #3498DB;
             height: 100%;
         }
         
         /* Button */
         .stButton>button {
-            width: 100%;
-            border-radius: 30px;
+            width: 100%; border-radius: 30px;
             background: linear-gradient(135deg, #3498DB 0%, #2980B9 100%);
-            color: white;
-            border: none;
-            padding: 12px 0;
-            font-weight: bold;
-            font-size: 18px;
-            transition: all 0.3s;
+            color: white; border: none; padding: 12px 0; font-weight: bold; font-size: 18px;
         }
-        .stButton>button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(52,152,219,0.3);
-        }
+        .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(52,152,219,0.3); }
         </style>
     """, unsafe_allow_html=True)
 
-    # 3. Sidebar Layout
+    # 3. Sidebar
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/3429/3429414.png", width=70)
         st.markdown("## 👩‍🏫 Teacher's Desk")
         
-        # Token Input
         if 'HF_TOKEN' in st.secrets:
             hf_token = st.secrets['HF_TOKEN']
             st.success("API Token Loaded 🔒")
@@ -230,40 +195,38 @@ def main():
                 st.warning("Token needed for feedback.")
         
         st.markdown("---")
-        st.info("**How it works:**\n1. **AI Grading:** BERT analyzes structure & vocab.\n2. **Feedback:** Qwen-72B gives teacher advice.")
+        st.info("**How it works:**\n1. **AI Grading:** BERT (Weights: 45/75/95)\n2. **Feedback:** Qwen-72B")
 
-    # 4. Main Content Layout
+    # 4. Main Layout
     st.markdown('<div class="main-header">🎓 AI Chinese Essay Grader</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Instant Scoring & Personalized Feedback for Hong Kong Students</div>', unsafe_allow_html=True)
 
-    # Input Area
     essay_text = st.text_area("📝 Paste Student Essay Here:", height=250, placeholder="在此輸入作文...")
     
     col_btn, _ = st.columns([1, 2])
     with col_btn:
         grade_btn = st.button("✨ Grade Essay")
 
-    # 5. Logic Execution
+    # 5. Execution
     if grade_btn:
         if not essay_text.strip():
             st.toast("⚠️ Please enter an essay first!", icon="🚫")
             return
 
-        # Progress UI
         progress_text = st.empty()
         bar = st.progress(0)
 
-        # Step A: Scoring
+        # A: Scoring
         scorer = load_scoring_pipeline()
         if scorer:
             progress_text.text("🧠 Analyzing text structure...")
             bar.progress(30)
             
             try:
-                # Get raw probabilities
+                # Get raw scores
                 predictions = scorer(essay_text, truncation=True, max_length=512, top_k=None)
                 
-                # Calculate Weighted Score
+                # Weighted Score
                 score, level_text, theme_color = calculate_weighted_score(predictions)
                 
             except Exception as e:
@@ -271,7 +234,7 @@ def main():
                 bar.empty()
                 return
 
-            # Step B: Feedback
+            # B: Feedback
             progress_text.text("✍️ Teacher is writing comments...")
             bar.progress(70)
             
@@ -281,7 +244,7 @@ def main():
             progress_text.empty()
             bar.empty()
 
-            # Step C: Display Results
+            # C: Display
             st.markdown("---")
             c1, c2 = st.columns([1, 2], gap="large")
 
