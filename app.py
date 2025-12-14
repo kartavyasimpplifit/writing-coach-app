@@ -1,5 +1,5 @@
 import streamlit as st
-import traceback  # NEW: Helps us see the real error
+import traceback
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(
@@ -18,7 +18,7 @@ except ImportError as e:
     st.stop()
 
 # --- 3. UI SETUP ---
-st.title("📝 AI Chinese Essay Grader (Debug Mode)")
+st.title("📝 AI Chinese Essay Grader")
 st.markdown("Paste your essay below.")
 
 # Check for Token
@@ -49,7 +49,7 @@ if st.button("Grade Essay", type="primary"):
         st.stop()
     
     if not hf_token:
-        st.error("Missing HF Token!")
+        st.error("Missing HF Token! Please add it to secrets.toml or input box.")
         st.stop()
 
     # Progress bar
@@ -66,8 +66,7 @@ if st.button("Grade Essay", type="primary"):
         label = result[0]['label']
         score_raw = result[0]['score']
         
-        # Map labels (Customize based on your model's training)
-        # Assuming LABEL_0 = Needs Improvement, LABEL_1 = Good, LABEL_2 = Excellent
+        # Map labels
         if "Excellent" in label or "LABEL_2" in label:
             pred_level = "Excellent"
             pred_score = int(85 + (score_raw * 10))
@@ -83,20 +82,27 @@ if st.button("Grade Essay", type="primary"):
         progress_bar.progress(60, text="Teacher is writing feedback...")
 
         # --- PIPELINE 2: FEEDBACK ---
-        client = InferenceClient(model="Qwen/Qwen2.5-3B-Instruct", token=hf_token)
+        # Switch to 72B model which is supported by the Serverless API
+        # If this fails, try "google/gemma-2-9b-it"
+        client = InferenceClient(model="Qwen/Qwen2.5-72B-Instruct", token=hf_token)
         
         prompt = f"""
-        Role: Strict Chinese Teacher.
-        Task: Grade this essay.
+        Role: Strict but fair Chinese Teacher (Traditional Chinese).
+        Task: Provide feedback for this primary school essay.
         Essay: "{essay_text[:1000]}"
-        Score: {pred_score} ({pred_level})
-        Feedback Language: Traditional Chinese.
-        Output: 1 strength, 1 specific improvement.
+        Grading: {pred_score}/100 ({pred_level})
+        
+        Requirements:
+        1. Identify 1 Strength.
+        2. Identify 1 Specific Area for Improvement (Vocabulary or Structure).
+        3. Keep it encouraging but concise (under 150 words).
         """
         
+        # Using chat_completion which auto-formats the prompt
         feedback_response = client.chat_completion(
             messages=[{"role": "user", "content": prompt}], 
-            max_tokens=300
+            max_tokens=350,
+            temperature=0.7
         )
         feedback = feedback_response.choices[0].message.content
 
@@ -113,5 +119,5 @@ if st.button("Grade Essay", type="primary"):
 
     except Exception as e:
         st.error("❌ An error occurred during processing.")
-        # This will show us EXACTLY where it failed
+        st.write("Debug info:")
         st.code(traceback.format_exc())
