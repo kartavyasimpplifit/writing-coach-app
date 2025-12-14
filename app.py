@@ -151,7 +151,8 @@ def main():
             # You might need to adjust this mapping based on your specific training labels.
             # For this demo, we simulate the score extraction from the label or raw logits.
             
-            result = scorer(essay_text[:512]) # Truncate to 512 for BERT
+            # Pass truncation arguments directly to the pipeline
+            result = scorer(essay_text, truncation=True, max_length=512)
             label = result[0]['label']
             confidence = result[0]['score']
             
