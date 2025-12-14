@@ -1,115 +1,128 @@
 import streamlit as st
-from transformers import pipeline
 import torch
 import gc
+from transformers import pipeline
 
-# --- Page Config ---
-st.set_page_config(page_title="Dual Model Chat", page_icon="⚡", layout="wide")
-st.title("⚡ Dual Model Interface: Fine-Tune vs Qwen")
+# --- Page Configuration ---
+st.set_page_config(page_title="Essay Coach & Scorer", page_icon="📝", layout="wide")
+st.title("📝 Essay Scoring & Coaching Assistant")
 
-# --- Model Paths ---
-# UPDATE THIS with your actual Fine-Tuned Model path or Hugging Face ID
-# If using Colab, this path must exist in the Colab instance (e.g., /content/drive/MyDrive/...)
-PIPELINE_1_MODEL_ID = "/content/drive/MyDrive/my_finetuned_model" 
-PIPELINE_2_MODEL_ID = "Qwen/Qwen1.5-7B-Chat-GPTQ-Int4"
+# --- Model Definitions ---
+# Pipeline 1: Your Fine-Tuned Model (Hosted on Hugging Face)
+MODEL_1_ID = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
+# Pipeline 2: Chat Model (Quantized for Memory Efficiency)
+MODEL_2_ID = "Qwen/Qwen1.5-7B-Chat-GPTQ-Int4"
 
-# --- Session State Management ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "current_model" not in st.session_state:
-    st.session_state.current_model = "Pipeline 1: Fine-Tuned Model"
-
-# --- Sidebar ---
-st.sidebar.header("⚙️ Control Panel")
-selected_model = st.sidebar.radio(
-    "Select Active Pipeline:",
-    ("Pipeline 1: Fine-Tuned Model", "Pipeline 2: Qwen1.5-7B (Int4)")
+# --- Sidebar Controls ---
+st.sidebar.header("⚙️ Model Selection")
+model_option = st.sidebar.radio(
+    "Select Active Function:",
+    ("Pipeline 1: Essay Scoring (Fine-Tuned)", "Pipeline 2: Writing Coach (Qwen Chat)")
 )
 
-# Clear chat if model changes to avoid context confusion
-if selected_model != st.session_state.current_model:
-    st.session_state.messages = []
-    st.session_state.current_model = selected_model
-    # Force garbage collection to free up VRAM for the new model
+# --- Memory Management ---
+def clear_gpu_memory():
+    """Forces RAM release to prevent Colab crashes."""
+    if "active_pipeline" in st.session_state and st.session_state.active_pipeline:
+        del st.session_state.active_pipeline
+    st.session_state.active_pipeline = None
     gc.collect()
     torch.cuda.empty_cache()
-    st.toast(f"Switched to {selected_model}. Memory cleared.", icon="🧹")
 
-# --- Model Loading Functions (Cached) ---
+# --- Model Loading Logic ---
+if "current_model_name" not in st.session_state:
+    st.session_state.current_model_name = None
 
-@st.cache_resource
-def get_pipeline_1():
-    """Loads the User's Fine-Tuned Model"""
-    print("Loading Pipeline 1...")
-    return pipeline(
-        "text-generation",
-        model=PIPELINE_1_MODEL_ID,
-        model_kwargs={"device_map": "auto"},
-        torch_dtype=torch.float16
-    )
+# If the user switches the model in the sidebar, we reset the GPU
+if st.session_state.current_model_name != model_option:
+    clear_gpu_memory()
+    st.session_state.current_model_name = model_option
+    st.toast(f"Switched to {model_option}. Memory cleared.", icon="🧹")
 
-@st.cache_resource
-def get_pipeline_2():
-    """Loads Qwen1.5-7B-Chat Int4"""
-    print("Loading Pipeline 2 (Qwen)...")
-    return pipeline(
-        "text-generation",
-        model=PIPELINE_2_MODEL_ID,
-        model_kwargs={"device_map": "auto", "use_cache": True},
-        torch_dtype=torch.float16
-    )
+# --- Main App Logic ---
 
-# --- Chat Interface ---
+# 1. Load the selected model only when needed
+if "active_pipeline" not in st.session_state or st.session_state.active_pipeline is None:
+    with st.spinner(f"Loading {model_option}... (This takes ~1 min)"):
+        try:
+            if model_option == "Pipeline 1: Essay Scoring (Fine-Tuned)":
+                # NOTE: If your model is BERT-based (Classification), change "text-generation" to "text-classification"
+                # Assuming it is a generative model based on your previous requests:
+                pipe = pipeline(
+                    "text-generation",
+                    model=MODEL_1_ID,
+                    model_kwargs={"device_map": "auto"},
+                    torch_dtype=torch.float16
+                )
+            else:
+                # Load Qwen Int4
+                pipe = pipeline(
+                    "text-generation",
+                    model=MODEL_2_ID,
+                    model_kwargs={"device_map": "auto", "use_cache": True},
+                    torch_dtype=torch.float16
+                )
+            st.session_state.active_pipeline = pipe
+            st.success("Model Ready!")
+        except Exception as e:
+            st.error(f"Error loading model: {e}")
+            st.stop()
 
-# Display chat history
+# 2. Chat/Input Interface
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Clear history on model switch to avoid context confusion
+if "history_tracker" not in st.session_state:
+    st.session_state.history_tracker = model_option
+if st.session_state.history_tracker != model_option:
+    st.session_state.messages = []
+    st.session_state.history_tracker = model_option
+
+# Display conversation
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # Handle User Input
-if prompt := st.chat_input("Type your message here..."):
-    # 1. Show User Message
+input_label = "Paste your essay here..." if "Essay Scoring" in model_option else "Ask your writing coach..."
+if prompt := st.chat_input(input_label):
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # 2. Generate Response
     with st.chat_message("assistant"):
-        with st.spinner(f"Generating with {selected_model}..."):
+        with st.spinner("Analyzing..."):
             try:
-                # Load ONLY the selected pipeline
-                if selected_model == "Pipeline 1: Fine-Tuned Model":
-                    pipe = get_pipeline_1()
-                    # Pipeline 1 Params (Edit as needed)
-                    outputs = pipe(
-                        prompt, 
-                        max_new_tokens=100, 
-                        do_sample=True,
-                        temperature=0.7
-                    )
-                    # Extract text for standard completion models
-                    response_text = outputs[0]["generated_text"]
-                    # If the model repeats the prompt, strip it out
-                    if response_text.startswith(prompt):
-                        response_text = response_text[len(prompt):]
-
-                else:
-                    # Pipeline 2 (Qwen)
-                    pipe = get_pipeline_2()
-                    # Qwen expects a list of messages
+                pipe = st.session_state.active_pipeline
+                
+                if "Qwen" in model_option:
+                    # Qwen Chat Logic
                     outputs = pipe(
                         st.session_state.messages,
                         max_new_tokens=256,
                         do_sample=True,
-                        temperature=0.7,
-                        top_k=50,
-                        top_p=0.95
+                        temperature=0.7
                     )
-                    response_text = outputs[0]["generated_text"][-1]["content"]
+                    response = outputs[0]["generated_text"][-1]["content"]
+                else:
+                    # Scoring Model Logic
+                    # If it's a generation model, it will generate text.
+                    # If it's a classification model (BERT), this might need adjustment.
+                    outputs = pipe(
+                        prompt,
+                        max_new_tokens=100,
+                        do_sample=True
+                    )
+                    # Handle different output formats
+                    if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
+                        raw_text = outputs[0]["generated_text"]
+                        response = raw_text.replace(prompt, "").strip()
+                    else:
+                        response = str(outputs)
 
-                # 3. Display and Save Response
-                st.markdown(response_text)
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
 
             except Exception as e:
-                st.error(f"Error: {e}")
-                st.warning("If you see an 'OOM' (Out of Memory) error, restart the runtime. Running two models on one GPU is tight!")
+                st.error(f"Processing Error: {e}")
+                st.warning("If you see an OOM error, refresh the page to reset GPU memory.")
