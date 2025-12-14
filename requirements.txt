@@ -1,6 +1,9 @@
+streamlit
 torch
 transformers
 accelerate
-optimum
-auto-gptq
-streamlit
+bitsandbytes
+plotly
+pandas
+pillow
+scipy
