@@ -1,4 +1,4 @@
 streamlit
-pandas
-plotly
-requests
+transformers
+torch
+huggingface_hub
