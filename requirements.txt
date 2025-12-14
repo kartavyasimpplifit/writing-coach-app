@@ -1,4 +1,7 @@
 streamlit
 pandas
 plotly
-requests
+torch
+transformers
+accelerate
+pycorrector
