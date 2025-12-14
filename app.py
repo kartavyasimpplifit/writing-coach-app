@@ -8,12 +8,15 @@ import time
 # --- Page Config ---
 st.set_page_config(page_title="HK Writing Coach AI", page_icon="📝", layout="wide")
 
-# --- API CONFIGURATION ---
-# These are the endpoints for the REAL models.
+# --- API CONFIGURATION (UPDATED) ---
+# 🔴 OLD: https://api-inference.huggingface.co/models/...
+# 🟢 NEW: https://router.huggingface.co/models/...
+
 # Pipeline 1: Your Fine-Tuned Model
-API_URL_SCORING = "https://api-inference.huggingface.co/models/MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
+API_URL_SCORING = "https://router.huggingface.co/models/MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
+
 # Pipeline 2: Qwen 2.5 7B (Instruct)
-API_URL_FEEDBACK = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
+API_URL_FEEDBACK = "https://router.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
 
 def query_model(payload, api_url, token):
     """Sends the text to Hugging Face and returns the JSON response."""
@@ -72,8 +75,7 @@ if st.session_state.analyze_clicked:
     else:
         # --- PIPELINE 1: SCORING ---
         with st.spinner("Pipeline 1: Running Fine-Tuned Scoring Model..."):
-            # We assume your model is a text-generator that outputs a score.
-            # If your model is a classifier, the payload needs to change.
+            # Payload for scoring
             scoring_payload = {
                 "inputs": f"Score this narrative essay (0-100):\n{essay_text}",
                 "parameters": {"max_new_tokens": 50, "temperature": 0.1, "return_full_text": False}
@@ -82,6 +84,7 @@ if st.session_state.analyze_clicked:
 
         # --- PIPELINE 2: FEEDBACK ---
         with st.spinner("Pipeline 2: Qwen is analyzing for feedback..."):
+            # Payload for feedback
             feedback_payload = {
                 "inputs": f"<|im_start|>system\nYou are a strict writing coach.<|im_end|>\n<|im_start|>user\nReview this narrative essay. Provide 3 specific improvements.\n\nEssay:\n{essay_text}<|im_end|>\n<|im_start|>assistant\n",
                 "parameters": {"max_new_tokens": 512, "temperature": 0.7, "return_full_text": False}
@@ -97,10 +100,9 @@ if st.session_state.analyze_clicked:
         elif isinstance(raw_feedback_response, dict) and "error" in raw_feedback_response:
             st.error(f"Pipeline 2 Error: {raw_feedback_response['error']}")
         else:
-            # 2. Parse Real Data (No Random Numbers)
+            # 2. Parse Real Data
             try:
                 # Parsing Pipeline 1 (Scoring)
-                # Adjust this depending on EXACTLY what MirandaZhao's model outputs
                 score_text = raw_score_response[0]['generated_text'] if isinstance(raw_score_response, list) else str(raw_score_response)
                 
                 # Attempt to extract a number from the text
@@ -112,7 +114,7 @@ if st.session_state.analyze_clicked:
                 feedback_text = raw_feedback_response[0]['generated_text'] if isinstance(raw_feedback_response, list) else str(raw_feedback_response)
 
                 # Display Results
-                st.success("Analysis Complete")
+                st.success("✅ Real Analysis Complete")
                 
                 m1, m2 = st.columns([1, 2])
                 with m1:
@@ -123,11 +125,11 @@ if st.session_state.analyze_clicked:
                     st.subheader("Coach Feedback (Qwen)")
                     st.write(feedback_text)
                     
-                # Visualization (Only if we have a real score)
+                # Visualization
                 if final_score > 0:
                     df = pd.DataFrame({
                         'Metric': ['Holistic Score', 'Language Flow', 'Narrative Structure'],
-                        'Value': [final_score, final_score, final_score] # Using the one real score for now
+                        'Value': [final_score, final_score, final_score] 
                     })
                     fig = px.bar(df, x='Metric', y='Value', range_y=[0,100])
                     st.plotly_chart(fig, use_container_width=True)
