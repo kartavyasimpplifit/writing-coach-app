@@ -3,161 +3,244 @@ from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassifica
 from huggingface_hub import InferenceClient
 import torch
 
-# --- 1. CONFIGURATION & UI SETUP ---
+# --- 1. CONFIGURATION & PAGE SETUP ---
 st.set_page_config(
     page_title="AI Chinese Essay Grader",
-    page_icon="📝",
+    page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a professional UI
+# --- 2. AWESOME CUSTOM CSS ---
 st.markdown("""
     <style>
-    .main { background-color: #f9f9f9; }
-    .stTextArea textarea {
-        background-color: #ffffff;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
-        font-family: "KaiTi", "SimKai", "Serif";
-        font-size: 16px;
+    /* Import Font */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+
+    /* Global Styles */
+    .main {
+        background-color: #F8F9FA;
+        font-family: 'Noto Sans TC', sans-serif;
     }
-    .score-card {
-        background-color: #ffffff;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    
+    /* Header Styling */
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #2C3E50;
+        margin-bottom: 0.5rem;
         text-align: center;
-        margin-bottom: 20px;
     }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #7F8C8D;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+
+    /* Text Area Styling */
+    .stTextArea textarea {
+        background-color: #FFFFFF;
+        border-radius: 12px;
+        border: 2px solid #E0E0E0;
+        padding: 15px;
+        font-size: 16px;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+        transition: border-color 0.3s;
+    }
+    .stTextArea textarea:focus {
+        border-color: #3498DB;
+    }
+
+    /* Button Styling */
+    .stButton>button {
+        width: 100%;
+        border-radius: 30px;
+        background: linear-gradient(135deg, #3498DB 0%, #2980B9 100%);
+        color: white;
+        font-weight: bold;
+        border: none;
+        padding: 12px 25px;
+        font-size: 18px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: transform 0.1s;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+        color: white;
+    }
+
+    /* Score Card Component */
+    .score-card {
+        background: white;
+        border-radius: 20px;
+        padding: 30px;
+        text-align: center;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        border-top: 6px solid #2ECC71; /* Default Green */
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+    .score-value {
+        font-size: 5rem;
+        font-weight: 800;
+        color: #2C3E50;
+        line-height: 1;
+        margin: 10px 0;
+    }
+    .score-label {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #27AE60;
+        background-color: #E8F8F5;
+        padding: 5px 20px;
+        border-radius: 50px;
+        display: inline-block;
+    }
+
+    /* Feedback Box Component */
     .feedback-box {
-        background-color: #f0f7ff;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 5px solid #0068c9;
+        background: white;
+        border-radius: 20px;
+        padding: 30px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        border-left: 6px solid #F1C40F;
+        height: 100%;
     }
-    h1, h2, h3 { color: #333333; }
+    .feedback-title {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #2C3E50;
+        margin-bottom: 15px;
+        display: flex;
+        align-items: center;
+    }
+    .feedback-content {
+        font-size: 1.1rem;
+        color: #555;
+        line-height: 1.6;
+    }
+    
+    /* Loading Bar */
+    .stProgress > div > div > div > div {
+        background-image: linear-gradient(to right, #3498DB, #2ECC71);
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. PIPELINE 1: SCORING MODEL (Runs Locally) ---
+# --- 3. BACKEND LOGIC ---
+
 @st.cache_resource
 def load_scoring_pipeline():
-    """
-    Loads the fine-tuned BERT model for scoring.
-    Forces CPU (device=-1) to prevent memory crashes on Cloud.
-    """
+    """Load BERT model efficiently."""
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        # device=-1 ensures we use CPU, which is safer for Streamlit Cloud
-        nlp_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
-        return nlp_pipeline
+        # Force CPU to prevent Cloud crashes
+        return pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
     except Exception as e:
-        st.error(f"Error loading scoring model: {e}")
+        st.error(f"⚠️ Model Loading Error: {e}")
         return None
 
-# --- 3. PIPELINE 2: FEEDBACK LLM (Uses Hugging Face API) ---
 def generate_feedback(essay, score, level, hf_token):
-    """
-    Calls Qwen2.5-72B-Instruct via API. 
-    Using 72B because smaller models often cause API routing errors.
-    """
+    """Generate feedback using Qwen-72B via API."""
     model_id = "Qwen/Qwen2.5-72B-Instruct"
     
+    if not hf_token:
+        return "⚠️ Please provide a Hugging Face Token to see feedback."
+
     client = InferenceClient(model=model_id, token=hf_token)
 
     prompt = f"""
-    Role: You are an experienced, supportive Chinese teacher (Traditional Chinese).
-    Task: Provide feedback for a Primary Student's narrative essay.
+    You are an experienced, encouraging Chinese teacher (Traditional Chinese).
     
-    Student's Essay:
-    "{essay}"
+    **Task:** Grade this Primary Student's essay.
+    **Student Essay:** "{essay}"
+    **Calculated Score:** {score}/100 ({level})
     
-    Grading Results:
-    - Score: {score}/100
-    - Proficiency Level: {level}
-    
-    Instructions:
-    1. Tone: Encouraging but educational. Be lenient but point out 1 specific area for improvement.
-    2. Format:
-       - 🌟 **Strengths**: Mention 1-2 good things (creativity, vocab, or structure).
-       - 💡 **Suggestion**: Give 1 actionable tip to improve 'Show, Don't Tell'.
-       - 📝 **Correction**: Fix one sentence or vocabulary misuse if found.
-    3. Language: Traditional Chinese (Cantonese context aware if applicable).
-    4. Length: Keep it concise (under 200 words).
+    **Instructions:**
+    1. **Tone:** Warm but professional. 
+    2. **Structure:**
+       - 🌟 **亮點 (Highlights):** 1-2 sentences on what they did well.
+       - 💡 **建議 (Suggestions):** 1 specific tip to improve 'Show, Don't Tell'.
+       - ✍️ **修訂 (Correction):** Correct one sentence or phrase for better vocabulary.
+    3. **Language:** Traditional Chinese (繁體中文).
+    4. **Length:** Keep it concise (~150 words).
     """
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        # Using chat_completion for better instruction following
-        response = client.chat_completion(messages, max_tokens=500, temperature=0.7)
+        response = client.chat_completion(messages, max_tokens=600, temperature=0.7)
         return response.choices[0].message.content
     except Exception as e:
-        return f"Error generating feedback: {e}"
+        return f"⚠️ Feedback Error: {str(e)}"
 
-# --- 4. MAIN APP LOGIC ---
+# --- 4. MAIN APP LAYOUT ---
 
 def main():
-    # Sidebar
+    # --- Sidebar ---
     with st.sidebar:
-        st.image("https://img.icons8.com/color/96/000000/classroom.png", width=80)
-        st.title("Teacher's Desk")
-        st.info("This app uses a Two-Stage Pipeline:")
-        st.markdown("1. **BERT Classifier**: Predicts the score locally.")
-        st.markdown("2. **Qwen-72B**: Generates feedback via API.")
+        st.image("https://cdn-icons-png.flaticon.com/512/3429/3429414.png", width=80)
+        st.markdown("## 👩‍🏫 Teacher's Desk")
+        st.markdown("---")
+        st.info("**System Status:**\n\n🟢 Scoring Model (Ready)\n\n🟢 Feedback AI (Ready)")
         
-        # Token Management
+        st.markdown("### 🔑 API Settings")
+        # Token Handling
         if 'HF_TOKEN' in st.secrets:
             hf_token = st.secrets['HF_TOKEN']
-            st.success("Hugging Face Token Loaded ✅")
+            st.success("Token Loaded from Secrets 🔒")
         else:
-            hf_token = st.text_input("Enter Hugging Face Token:", type="password")
+            hf_token = st.text_input("Hugging Face Token", type="password", help="Paste your HF Write Token here.")
             if not hf_token:
-                st.warning("Please enter your token to generate feedback.")
-
-    # Main Content
-    st.title("📝 AI Chinese Essay Grader")
-    st.markdown("Paste a primary school Chinese essay below to get an instant score and feedback.")
-
-    essay_text = st.text_area("Student Essay Input", height=300, placeholder="在此輸入作文...")
-
-    if st.button("Grade Essay", type="primary", use_container_width=True):
-        if not essay_text.strip():
-            st.warning("Please enter an essay first!")
-            return
+                st.warning("Token required for feedback.")
         
-        if not hf_token:
-            st.error("Hugging Face Token is missing! Please add it to your secrets or the sidebar.")
+        st.markdown("---")
+        st.caption("v2.0 | Powered by Qwen & BERT")
+
+    # --- Header ---
+    st.markdown('<div class="main-header">🎓 AI Chinese Essay Grader</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Instant Scoring & Personalized Feedback for Hong Kong Primary Students</div>', unsafe_allow_html=True)
+
+    # --- Input Section ---
+    col_input, col_space = st.columns([1, 0.05]) # Just styling spacing
+    with col_input:
+        essay_text = st.text_area("📝 Paste Student Essay Here:", height=250, placeholder="在此輸入作文...")
+        
+        grade_btn = st.button("✨ Grade Essay Now", type="primary")
+
+    # --- Logic & Output ---
+    if grade_btn:
+        if not essay_text.strip():
+            st.toast("⚠️ Please enter an essay first!", icon="🚫")
             return
 
-        # Progress bar
-        progress_text = "Analyzing text structure..."
-        my_bar = st.progress(0, text=progress_text)
+        # Progress UI
+        progress_text = st.empty()
+        my_bar = st.progress(0)
 
-        # --- EXECUTE PIPELINE 1 (SCORING) ---
+        # 1. Scoring Phase
         scorer = load_scoring_pipeline()
         if scorer:
-            my_bar.progress(30, text="Calculating proficiency score...")
+            progress_text.text("🧠 Analyzing text structure and vocabulary...")
+            my_bar.progress(30)
             
             try:
-                # 1. Get RAW scores for ALL labels (top_k=None)
+                # Get raw scores
                 predictions = scorer(essay_text, truncation=True, max_length=512, top_k=None)
                 
-                # --- [CRITICAL FIX: Added Chinese Labels] ---
+                # Weighted Scoring Logic
                 label_weights = {
-                    "不及格": 45,       # Needs Improvement
-                    "需改進": 45,       # Alternative for Needs Improvement
-                    "良好": 75,         # Good
-                    "優秀": 95,         # Excellent (Traditional)
-                    "优秀": 95,         # Excellent (Simplified fallback)
-                    "LABEL_0": 45,
-                    "LABEL_1": 75,
-                    "LABEL_2": 95
+                    "不及格": 45, "Needs Improvement": 45, "LABEL_0": 45,
+                    "良好": 75, "Good": 75, "LABEL_1": 75,
+                    "優秀": 95, "Excellent": 95, "LABEL_2": 95
                 }
 
-                # 3. Calculate Weighted Score
                 weighted_score = 0
                 total_confidence = 0
                 dominant_label = ""
@@ -166,68 +249,70 @@ def main():
                 for p in predictions:
                     l = p['label']
                     c = p['score']
-                    
                     if c > highest_conf:
                         highest_conf = c
                         dominant_label = l
-
-                    if l in label_weights:
-                        weighted_score += (label_weights[l] * c)
-                        total_confidence += c
+                    # Fuzzy match keys
+                    for key, val in label_weights.items():
+                        if key in l:
+                            weighted_score += (val * c)
+                            total_confidence += c
+                            break
                 
-                # Final Score
                 pred_score = int(weighted_score)
                 
-                # Fallback if dictionary lookup failed (e.g. if sum is 0)
-                if pred_score == 0 and dominant_label:
-                     # Attempt to salvage based on dominant label if it wasn't in dict
-                     if "優" in dominant_label or "Exc" in dominant_label: pred_score = 90
-                     elif "良" in dominant_label or "Good" in dominant_label: pred_score = 75
-                     else: pred_score = 45
-
-                # Determine Level based on the calculated score
+                # Level Determination
                 if pred_score >= 85:
                     pred_level = "Excellent (優秀)"
+                    color_theme = "#2ECC71" # Green
+                    bg_theme = "#E8F8F5"
                 elif pred_score >= 60:
                     pred_level = "Good (良好)"
+                    color_theme = "#F39C12" # Orange
+                    bg_theme = "#FEF9E7"
                 else:
                     pred_level = "Needs Improvement (需改進)"
-
-                # 4. Debug Expander
-                with st.expander("🔍 View Scoring Details (Debug)"):
-                    st.write(f"Raw Output: {predictions}")
-                    st.write(f"Weighted Calculation: {pred_score}")
+                    color_theme = "#E74C3C" # Red
+                    bg_theme = "#FDEDEC"
 
             except Exception as e:
-                st.error(f"Error during scoring: {e}")
+                st.error(f"Scoring Failed: {e}")
                 my_bar.empty()
                 return
 
-            my_bar.progress(60, text="Generating teacher feedback...")
-
-            # --- EXECUTE PIPELINE 2 (FEEDBACK) ---
+            # 2. Feedback Phase
+            progress_text.text("✍️ Teacher is writing comments...")
+            my_bar.progress(70)
+            
             feedback = generate_feedback(essay_text, pred_score, pred_level, hf_token)
             
-            my_bar.progress(100, text="Done!")
+            my_bar.progress(100)
+            progress_text.empty()
             my_bar.empty()
 
-            # --- DISPLAY RESULTS ---
-            col1, col2 = st.columns([1, 2])
+            # --- Results Display ---
+            st.markdown("---")
+            res_col1, res_col2 = st.columns([1, 2], gap="large")
 
-            with col1:
+            with res_col1:
+                # Dynamic CSS for Score Card based on result
                 st.markdown(f"""
-                <div class="score-card">
-                    <h3 style="margin:0; color:#888;">Proficiency</h3>
-                    <h1 style="font-size: 36px; color: #0068c9; margin: 10px 0;">{pred_level}</h1>
-                    <h2 style="color: #333;">{pred_score}/100</h2>
+                <div class="score-card" style="border-top: 6px solid {color_theme};">
+                    <h3 style="margin:0; color:#888; text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px;">Proficiency Score</h3>
+                    <div class="score-value">{pred_score}</div>
+                    <div class="score-label" style="color: {color_theme}; background-color: {bg_theme};">{pred_level}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
-            with col2:
-                st.markdown("### 👩‍🏫 Teacher's Feedback")
+            with res_col2:
                 st.markdown(f"""
                 <div class="feedback-box">
-                    {feedback}
+                    <div class="feedback-title">
+                        👩‍🏫 Teacher's Feedback
+                    </div>
+                    <div class="feedback-content">
+                        {feedback}
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
 
