@@ -16,14 +16,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS (Awesome UI + Dark Text Fix)
+# Custom CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
-    
     .main { background-color: #F8F9FA; font-family: 'Noto Sans TC', sans-serif; }
     
-    /* FIX: Force Input Text Color to Dark Grey */
     .stTextArea textarea {
         background-color: #FFFFFF !important;
         color: #333333 !important;
@@ -34,9 +32,8 @@ st.markdown("""
         font-size: 16px;
         font-family: "KaiTi", "SimKai", "Serif";
     }
-    .stTextArea textarea:focus { border-color: #3498DB; box-shadow: 0 0 0 2px rgba(52,152,219,0.2); }
+    .stTextArea textarea:focus { border-color: #3498DB; }
     
-    /* Score Card */
     .score-card {
         background: white; border-radius: 15px; padding: 25px;
         text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
@@ -46,16 +43,15 @@ st.markdown("""
     .score-value { font-size: 4.5rem; font-weight: 800; color: #2C3E50; margin: 10px 0; line-height: 1; }
     .score-label { font-size: 1.2rem; font-weight: 600; padding: 5px 15px; border-radius: 20px; color: white; }
 
-    /* Feedback Box */
     .feedback-box {
         background: white; border-radius: 15px; padding: 25px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 5px solid #3498DB;
         height: 100%;
     }
     
-    /* Header & Buttons */
     .main-header { font-size: 2.5rem; font-weight: 700; color: #2C3E50; text-align: center; margin-top: -20px; }
     .sub-header { font-size: 1.1rem; color: #7F8C8D; text-align: center; margin-bottom: 2rem; }
+    
     .stButton>button {
         width: 100%; border-radius: 30px;
         background: linear-gradient(135deg, #3498DB 0%, #2980B9 100%);
@@ -87,7 +83,7 @@ def calculate_weighted_score(predictions):
         "不及格": 45, "Needs Improvement": 45, "LABEL_0": 45,
         "良好": 75, "Good": 75, "LABEL_1": 75,
         "優秀": 95, "Excellent": 95, "LABEL_2": 95,
-        "优秀": 95 # Simplified Chinese support
+        "优秀": 95
     }
 
     weighted_score = 0
@@ -107,11 +103,11 @@ def calculate_weighted_score(predictions):
     final_score = int(weighted_score)
     
     if final_score >= 85:
-        return final_score, "Excellent (優秀)", "#2ECC71" # Green
+        return final_score, "Excellent (優秀)", "#2ECC71"
     elif final_score >= 60:
-        return final_score, "Good (良好)", "#F39C12" # Orange
+        return final_score, "Good (良好)", "#F39C12"
     else:
-        return final_score, "Needs Improvement (需改進)", "#E74C3C" # Red
+        return final_score, "Needs Improvement (需改進)", "#E74C3C"
 
 def generate_feedback(essay, score, level, hf_token):
     """Generate feedback using Qwen-72B via API."""
@@ -139,9 +135,8 @@ def generate_feedback(essay, score, level, hf_token):
 def save_to_github(essay, score, level, correction):
     """Saves teacher feedback to a JSON file in YOUR GitHub Repo."""
     
-    # --- CONFIGURATION: CHANGE THIS! ---
-    REPO_NAME = "your-github-username/your-repo-name" 
-    # Example: "MirandaZhao/essay-grader-app"
+    # --- ✅ UPDATED REPO NAME ---
+    REPO_NAME = "kartavyasimpplifit/V2_2510gnam08_Atri_Kartavya_isom5240-storytelling-app"
     
     if 'GITHUB_TOKEN' not in st.secrets:
         st.error("Missing GITHUB_TOKEN in Secrets.")
@@ -156,7 +151,7 @@ def save_to_github(essay, score, level, correction):
             contents = repo.get_contents(file_path)
             existing_data = json.loads(contents.decoded_content.decode())
         except:
-            existing_data = [] # Create new if missing
+            existing_data = []
             
         new_entry = {
             "essay": essay,
@@ -169,7 +164,7 @@ def save_to_github(essay, score, level, correction):
         updated_content = json.dumps(existing_data, indent=2, ensure_ascii=False)
         
         if 'contents' in locals():
-            repo.update_file(file_path, "Add feedback", updated_content, contents.sha)
+            repo.update_file(file_path, "Add teacher feedback", updated_content, contents.sha)
         else:
             repo.create_file(file_path, "Init database", updated_content)
             
@@ -183,7 +178,6 @@ def save_to_github(essay, score, level, correction):
 # ==========================================
 
 def main():
-    # Sidebar
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/3429/3429414.png", width=80)
         st.markdown("## 👩‍🏫 Teacher's Desk")
@@ -195,13 +189,11 @@ def main():
         
         st.info("**System Status:**\n🟢 Scoring (Local)\n🟢 Feedback (Remote)\n🟢 Database (GitHub)")
 
-    # Main Area
     st.markdown('<div class="main-header">🎓 AI Chinese Essay Grader</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Instant Scoring & Personalized Feedback</div>', unsafe_allow_html=True)
 
     essay_text = st.text_area("📝 Paste Student Essay Here:", height=250, placeholder="在此輸入作文...")
     
-    # Buttons
     col_grade, _ = st.columns([1, 3])
     with col_grade:
         grade_btn = st.button("✨ Grade Essay")
@@ -217,7 +209,6 @@ def main():
         progress_text = st.empty()
         bar = st.progress(0)
 
-        # 1. Scoring
         scorer = load_scoring_pipeline()
         if scorer:
             progress_text.text("🧠 Analyzing structure...")
@@ -226,7 +217,6 @@ def main():
                 preds = scorer(essay_text, truncation=True, max_length=512, top_k=None)
                 score, level_text, color = calculate_weighted_score(preds)
                 
-                # Save to session state so it persists for the feedback button
                 st.session_state.score = score
                 st.session_state.level_text = level_text
                 st.session_state.color = color
@@ -236,7 +226,6 @@ def main():
                 st.error(f"Scoring Failed: {e}")
                 return
 
-            # 2. Feedback
             progress_text.text("✍️ Drafting comments...")
             bar.progress(70)
             feedback = generate_feedback(essay_text, score, level_text, hf_token)
@@ -247,7 +236,6 @@ def main():
             bar.empty()
             st.session_state.result_generated = True
 
-    # Display Results (Persist after button click)
     if st.session_state.result_generated:
         st.markdown("---")
         c1, c2 = st.columns([1, 2], gap="large")
@@ -271,7 +259,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-        # --- TEACHER VALIDATION FORM ---
         st.markdown("---")
         st.subheader("🧐 Help Improve the AI")
         
@@ -287,14 +274,14 @@ def main():
             if submit_feed:
                 final_label = correction
                 if "Yes" in correction:
-                    final_label = st.session_state.level_text.split('(')[0] # Keep original
+                    final_label = st.session_state.level_text.split('(')[0]
                 else:
                     final_label = correction.replace("⚠️ No, should be ", "").replace("'", "")
                 
                 if save_to_github(st.session_state.essay, st.session_state.score, st.session_state.level_text, final_label):
                     st.success("✅ Feedback saved to GitHub! The model will learn from this next week.")
                 else:
-                    st.error("❌ Failed to save. Check your GITHUB_TOKEN and Repo Name.")
+                    st.error("❌ Failed to save. Check your GITHUB_TOKEN.")
 
 if __name__ == "__main__":
     main()
