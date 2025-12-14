@@ -1,25 +1,25 @@
 import streamlit as st
-import os
+import traceback  # NEW: Helps us see the real error
 
-# --- 1. CONFIGURATION (Must be first) ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(
     page_title="AI Essay Grader",
     page_icon="📝",
     layout="wide"
 )
 
-# --- 2. LAZY IMPORTS (Prevents startup crash) ---
-# We verify libraries are installed but don't load them into RAM yet
+# --- 2. LAZY IMPORTS ---
 try:
     import torch
+    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
     from huggingface_hub import InferenceClient
-except ImportError:
-    st.error("Libraries missing! Did you upload requirements.txt?")
+except ImportError as e:
+    st.error(f"Libraries missing! {e}")
     st.stop()
 
 # --- 3. UI SETUP ---
-st.title("📝 AI Chinese Essay Grader")
-st.markdown("Paste your essay below. The model will load only when you click 'Grade'.")
+st.title("📝 AI Chinese Essay Grader (Debug Mode)")
+st.markdown("Paste your essay below.")
 
 # Check for Token
 if 'HF_TOKEN' in st.secrets:
@@ -29,22 +29,18 @@ else:
 
 essay_text = st.text_area("Student Essay Input", height=250)
 
-# --- 4. SCORING FUNCTION (Cached) ---
+# --- 4. SCORING FUNCTION ---
 @st.cache_resource
 def get_scorer():
-    """
-    Imports and loads model ONLY when needed.
-    """
-    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
-    
-    print("Loading Scoring Model...") # Check your logs for this
+    print("Loading Scoring Model...")
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     
+    # Load Tokenizer & Model explicitly
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForSequenceClassification.from_pretrained(model_id)
     
-    # We define the pipeline
-    return pipeline("text-classification", model=model, tokenizer=tokenizer)
+    # Force CPU (device=-1) to prevent memory crashes on Cloud
+    return pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
 
 # --- 5. MAIN LOGIC ---
 if st.button("Grade Essay", type="primary"):
@@ -57,20 +53,21 @@ if st.button("Grade Essay", type="primary"):
         st.stop()
 
     # Progress bar
-    progress_bar = st.progress(0, text="Waking up the AI...")
+    progress_bar = st.progress(0, text="Starting AI engines...")
 
     try:
-        # Load heavy model NOW (saves startup time)
+        # --- PIPELINE 1: SCORING ---
         scorer = get_scorer()
-        progress_bar.progress(40, text="Scoring essay...")
+        progress_bar.progress(30, text="Analyzing text structure...")
         
-        # 1. Pipeline 1: Scoring
-        # Truncate to 512 to prevent BERT crash
+        # [CRITICAL FIX] Explicitly handle long text truncation
         result = scorer(essay_text, truncation=True, max_length=512)
+        
         label = result[0]['label']
         score_raw = result[0]['score']
         
-        # Map labels
+        # Map labels (Customize based on your model's training)
+        # Assuming LABEL_0 = Needs Improvement, LABEL_1 = Good, LABEL_2 = Excellent
         if "Excellent" in label or "LABEL_2" in label:
             pred_level = "Excellent"
             pred_score = int(85 + (score_raw * 10))
@@ -83,11 +80,19 @@ if st.button("Grade Essay", type="primary"):
         
         pred_score = min(100, pred_score) # Cap at 100
 
-        progress_bar.progress(70, text="Generating feedback...")
+        progress_bar.progress(60, text="Teacher is writing feedback...")
 
-        # 2. Pipeline 2: Feedback (API)
+        # --- PIPELINE 2: FEEDBACK ---
         client = InferenceClient(model="Qwen/Qwen2.5-3B-Instruct", token=hf_token)
-        prompt = f"Act as a strict Chinese teacher. Grade this essay: {essay_text}. Score: {pred_score}. Level: {pred_level}. Give 1 specific improvement in Traditional Chinese."
+        
+        prompt = f"""
+        Role: Strict Chinese Teacher.
+        Task: Grade this essay.
+        Essay: "{essay_text[:1000]}"
+        Score: {pred_score} ({pred_level})
+        Feedback Language: Traditional Chinese.
+        Output: 1 strength, 1 specific improvement.
+        """
         
         feedback_response = client.chat_completion(
             messages=[{"role": "user", "content": prompt}], 
@@ -103,7 +108,10 @@ if st.button("Grade Essay", type="primary"):
             st.metric(label="Proficiency", value=pred_level)
             st.metric(label="Score", value=f"{pred_score}/100")
         with col2:
-            st.info(feedback)
+            st.success("Teacher's Feedback:")
+            st.write(feedback)
 
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+        st.error("❌ An error occurred during processing.")
+        # This will show us EXACTLY where it failed
+        st.code(traceback.format_exc())
