@@ -53,10 +53,12 @@ def load_scoring_pipeline():
     """
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     try:
-        # Load directly from Hub
+        # Load tokenizer and model explicitly to ensure we can control truncation
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        # Create a classification pipeline
+        
+        # Create the pipeline
+        # We don't pass truncation here; we pass it when calling the pipeline
         nlp_pipeline = pipeline("text-classification", model=model, tokenizer=tokenizer)
         return nlp_pipeline
     except Exception as e:
@@ -69,6 +71,7 @@ def generate_feedback(essay, score, level, hf_token):
     Calls Qwen2.5-3B-Instruct via Hugging Face Inference API.
     This ensures it runs fast on Streamlit Cloud without memory crashes.
     """
+    # Using the 3B model as requested
     model_id = "Qwen/Qwen2.5-3B-Instruct"
     
     client = InferenceClient(model=model_id, token=hf_token)
@@ -134,49 +137,51 @@ def main():
             return
         
         if not hf_token:
-            st.error("Hugging Face Token is missing!")
+            st.error("Hugging Face Token is missing! Please check your secrets.toml or sidebar.")
             return
 
         # Progress bar for UX
         progress_text = "Analyzing text structure..."
         my_bar = st.progress(0, text=progress_text)
 
-        # --- EXECUTE PIPELINE 1 ---
+        # --- EXECUTE PIPELINE 1 (SCORING) ---
         scorer = load_scoring_pipeline()
         if scorer:
             my_bar.progress(30, text="Calculating proficiency score...")
             
-            # Since the model is a classifier, we need to map the label to a score/level.
-            # Assuming the model outputs labels like "LABEL_0", "LABEL_1", etc.
-            # You might need to adjust this mapping based on your specific training labels.
-            # For this demo, we simulate the score extraction from the label or raw logits.
-            
-            # Pass truncation arguments directly to the pipeline
-            result = scorer(essay_text, truncation=True, max_length=512)
-            label = result[0]['label']
-            confidence = result[0]['score']
-            
-            # MAPPING LOGIC (Adjust based on your specific model's label map)
-            # Example: If your model outputs "Excellent", "Good", "Needs Improvement"
-            # Or if it outputs LABEL_0 (Low), LABEL_1 (Mid), LABEL_2 (High)
-            
-            # Placeholder mapping for demonstration:
-            if "LABEL_2" in label or "Excellent" in label:
-                pred_level = "Excellent"
-                pred_score = int(85 + (confidence * 10)) # Dynamic score
-            elif "LABEL_1" in label or "Good" in label:
-                pred_level = "Good"
-                pred_score = int(60 + (confidence * 20))
-            else: # LABEL_0 or Needs Improvement
-                pred_level = "Needs Improvement"
-                pred_score = int(40 + (confidence * 15))
-            
-            # Cap score at 100
-            pred_score = min(100, pred_score)
+            try:
+                # --- [FIX IS HERE] ---
+                # We tell the pipeline to explicitly truncate inputs to 512 tokens.
+                # This prevents the "Index out of range" error for long essays.
+                result = scorer(essay_text, truncation=True, max_length=512)
+                
+                label = result[0]['label']
+                confidence = result[0]['score']
+                
+                # MAPPING LOGIC
+                # Adjust this if your model output labels differ (e.g., LABEL_0 vs LABEL_1)
+                # This logic assumes the model returns readable labels or specific ID mappings
+                if "Excellent" in label or "LABEL_2" in label:
+                    pred_level = "Excellent"
+                    pred_score = int(85 + (confidence * 10)) 
+                elif "Good" in label or "LABEL_1" in label:
+                    pred_level = "Good"
+                    pred_score = int(60 + (confidence * 20))
+                else: # Needs Improvement or LABEL_0
+                    pred_level = "Needs Improvement"
+                    pred_score = int(40 + (confidence * 15))
+                
+                # Cap score at 100
+                pred_score = min(100, pred_score)
+
+            except Exception as e:
+                st.error(f"Error during scoring: {e}")
+                my_bar.empty()
+                return
 
             my_bar.progress(60, text="Generating teacher feedback with Qwen2.5...")
 
-            # --- EXECUTE PIPELINE 2 ---
+            # --- EXECUTE PIPELINE 2 (FEEDBACK) ---
             feedback = generate_feedback(essay_text, pred_score, pred_level, hf_token)
             
             my_bar.progress(100, text="Done!")
