@@ -143,19 +143,18 @@ def main():
             
             try:
                 # 1. Get RAW scores for ALL labels (top_k=None)
-                # This fixes the static scoring issue by allowing us to calculate a weighted average
                 predictions = scorer(essay_text, truncation=True, max_length=512, top_k=None)
                 
-                # 2. Define Weights for your Labels
-                # Adjust these keys ('LABEL_0', etc.) if your model uses specific names like 'Good'
+                # --- [CRITICAL FIX: Added Chinese Labels] ---
                 label_weights = {
-                    "LABEL_0": 45,  # Needs Improvement Base
-                    "LABEL_1": 75,  # Good Base
-                    "LABEL_2": 95,  # Excellent Base
-                    # Fallbacks in case your model returns text labels:
-                    "Needs Improvement": 45,
-                    "Good": 75,
-                    "Excellent": 95
+                    "不及格": 45,       # Needs Improvement
+                    "需改進": 45,       # Alternative for Needs Improvement
+                    "良好": 75,         # Good
+                    "優秀": 95,         # Excellent (Traditional)
+                    "优秀": 95,         # Excellent (Simplified fallback)
+                    "LABEL_0": 45,
+                    "LABEL_1": 75,
+                    "LABEL_2": 95
                 }
 
                 # 3. Calculate Weighted Score
@@ -164,7 +163,6 @@ def main():
                 dominant_label = ""
                 highest_conf = 0
 
-                # Iterate through predictions (e.g., Excellent: 0.8, Good: 0.2)
                 for p in predictions:
                     l = p['label']
                     c = p['score']
@@ -180,15 +178,22 @@ def main():
                 # Final Score
                 pred_score = int(weighted_score)
                 
+                # Fallback if dictionary lookup failed (e.g. if sum is 0)
+                if pred_score == 0 and dominant_label:
+                     # Attempt to salvage based on dominant label if it wasn't in dict
+                     if "優" in dominant_label or "Exc" in dominant_label: pred_score = 90
+                     elif "良" in dominant_label or "Good" in dominant_label: pred_score = 75
+                     else: pred_score = 45
+
                 # Determine Level based on the calculated score
                 if pred_score >= 85:
-                    pred_level = "Excellent"
+                    pred_level = "Excellent (優秀)"
                 elif pred_score >= 60:
-                    pred_level = "Good"
+                    pred_level = "Good (良好)"
                 else:
-                    pred_level = "Needs Improvement"
+                    pred_level = "Needs Improvement (需改進)"
 
-                # 4. Debug Expander (Optional, helpful for you)
+                # 4. Debug Expander
                 with st.expander("🔍 View Scoring Details (Debug)"):
                     st.write(f"Raw Output: {predictions}")
                     st.write(f"Weighted Calculation: {pred_score}")
@@ -213,7 +218,7 @@ def main():
                 st.markdown(f"""
                 <div class="score-card">
                     <h3 style="margin:0; color:#888;">Proficiency</h3>
-                    <h1 style="font-size: 48px; color: #0068c9; margin: 10px 0;">{pred_level}</h1>
+                    <h1 style="font-size: 36px; color: #0068c9; margin: 10px 0;">{pred_level}</h1>
                     <h2 style="color: #333;">{pred_score}/100</h2>
                 </div>
                 """, unsafe_allow_html=True)
