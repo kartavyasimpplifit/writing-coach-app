@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a "Fantastic UI"
+# Custom CSS for a clean, professional look
 st.markdown("""
     <style>
     .main {
@@ -53,7 +53,7 @@ def load_scoring_pipeline():
     """
     model_id = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
     try:
-        # Load tokenizer and model explicitly to ensure we can control truncation
+        # Load tokenizer and model
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForSequenceClassification.from_pretrained(model_id)
         
@@ -71,9 +71,9 @@ def generate_feedback(essay, score, level, hf_token):
     Calls Qwen2.5-3B-Instruct via Hugging Face Inference API.
     This ensures it runs fast on Streamlit Cloud without memory crashes.
     """
-    # Using the 3B model as requested
     model_id = "Qwen/Qwen2.5-3B-Instruct"
     
+    # Use the Inference Client to connect to Hugging Face
     client = InferenceClient(model=model_id, token=hf_token)
 
     # Prompt Engineering for the "Decent Educator" Persona
@@ -99,6 +99,7 @@ def generate_feedback(essay, score, level, hf_token):
     """
 
     try:
+        # Send request to Hugging Face API
         messages = [{"role": "user", "content": prompt}]
         response = client.chat_completion(messages, max_tokens=500, temperature=0.7)
         return response.choices[0].message.content
@@ -108,7 +109,7 @@ def generate_feedback(essay, score, level, hf_token):
 # --- 4. MAIN APP LOGIC ---
 
 def main():
-    # Sidebar
+    # Sidebar Setup
     with st.sidebar:
         st.image("https://img.icons8.com/color/96/000000/classroom.png", width=80)
         st.title("Teacher's Desk")
@@ -116,7 +117,8 @@ def main():
         st.markdown("1. **BERT Classifier**: Predicts the score.")
         st.markdown("2. **Qwen2.5-3B**: Generates personalized feedback.")
         
-        # Get Token from Secrets
+        # Token Management
+        # Checks if token is in secrets (for Cloud) or asks user (for Local)
         if 'HF_TOKEN' in st.secrets:
             hf_token = st.secrets['HF_TOKEN']
             st.success("Hugging Face Token Loaded ✅")
@@ -125,7 +127,7 @@ def main():
             if not hf_token:
                 st.warning("Please enter your token to generate feedback.")
 
-    # Main Content
+    # Main Page Content
     st.title("📝 AI Chinese Essay Grader")
     st.markdown("Paste a primary school Chinese essay below to get an instant score and feedback.")
 
@@ -137,10 +139,10 @@ def main():
             return
         
         if not hf_token:
-            st.error("Hugging Face Token is missing! Please check your secrets.toml or sidebar.")
+            st.error("Hugging Face Token is missing! Please check your secrets or enter it in the sidebar.")
             return
 
-        # Progress bar for UX
+        # Progress Indicator
         progress_text = "Analyzing text structure..."
         my_bar = st.progress(0, text=progress_text)
 
@@ -150,17 +152,13 @@ def main():
             my_bar.progress(30, text="Calculating proficiency score...")
             
             try:
-                # --- [FIX IS HERE] ---
-                # We tell the pipeline to explicitly truncate inputs to 512 tokens.
-                # This prevents the "Index out of range" error for long essays.
+                # [CRITICAL FIX] Truncate input to 512 tokens to prevent BERT crashing
                 result = scorer(essay_text, truncation=True, max_length=512)
                 
                 label = result[0]['label']
                 confidence = result[0]['score']
                 
-                # MAPPING LOGIC
-                # Adjust this if your model output labels differ (e.g., LABEL_0 vs LABEL_1)
-                # This logic assumes the model returns readable labels or specific ID mappings
+                # Mapping Logic (Customize this based on your specific model labels)
                 if "Excellent" in label or "LABEL_2" in label:
                     pred_level = "Excellent"
                     pred_score = int(85 + (confidence * 10)) 
@@ -171,8 +169,8 @@ def main():
                     pred_level = "Needs Improvement"
                     pred_score = int(40 + (confidence * 15))
                 
-                # Cap score at 100
-                pred_score = min(100, pred_score)
+                # Ensure score stays within 0-100
+                pred_score = min(100, max(0, pred_score))
 
             except Exception as e:
                 st.error(f"Error during scoring: {e}")
@@ -191,6 +189,7 @@ def main():
             col1, col2 = st.columns([1, 2])
 
             with col1:
+                # Display Score Card
                 st.markdown(f"""
                 <div class="score-card">
                     <h3 style="margin:0; color:#888;">Proficiency</h3>
@@ -198,14 +197,3 @@ def main():
                     <h2 style="color: #333;">{pred_score}/100</h2>
                 </div>
                 """, unsafe_allow_html=True)
-
-            with col2:
-                st.markdown("### 👩‍🏫 Teacher's Feedback")
-                st.markdown(f"""
-                <div class="feedback-box">
-                    {feedback}
-                </div>
-                """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()
