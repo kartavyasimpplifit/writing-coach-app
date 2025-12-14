@@ -1,128 +1,164 @@
 import streamlit as st
-import torch
-import gc
-from transformers import pipeline
+import pandas as pd
+import plotly.express as px
+# UPDATED IMPORT: We import from the local pipelines.py file we created above
+from pipelines import ScoringPipeline, FeedbackPipeline
+from PIL import Image
+import time
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Essay Coach & Scorer", page_icon="📝", layout="wide")
-st.title("📝 Essay Scoring & Coaching Assistant")
+st.set_page_config(page_title="HK Writing Coach AI", page_icon="📝", layout="wide")
 
-# --- Model Definitions ---
-# Pipeline 1: Your Fine-Tuned Model (Hosted on Hugging Face)
-MODEL_1_ID = "MirandaZhao/Finetuned_Essay_Scoring_Model_Epoch3"
-# Pipeline 2: Chat Model (Quantized for Memory Efficiency)
-MODEL_2_ID = "Qwen/Qwen1.5-7B-Chat-GPTQ-Int4"
+# --- Sidebar ---
+with st.sidebar:
+    st.title("📝 Writing Coach")
+    st.caption("AI Essay Grading Demo")
+    st.divider()
+    
+    # --- AUTOMATIC TOKEN DETECTION ---
+    # 1. Try to get token from Secrets (Cloud or Local)
+    if "HUGGINGFACE_API_TOKEN" in st.secrets:
+        hf_token = st.secrets["HUGGINGFACE_API_TOKEN"]
+        st.success("✅ System Online (Token Loaded)")
+    # 2. If no secret found, ask user manually
+    else:
+        st.warning("⚠️ No Token Found in Secrets")
+        hf_token = st.text_input("Enter HuggingFace Token", type="password")
+    
+    st.info("Pipeline 1: MirandaZhao/Finetuned_Essay_Scoring\nPipeline 2: Qwen/Qwen2.5-7B-Instruct")
+    st.markdown("---")
+    st.markdown("**Demo Guide:**\n1. Select a Genre.\n2. Choose 'Type Text' or 'Upload Image'.\n3. Click Analyze.")
 
-# --- Sidebar Controls ---
-st.sidebar.header("⚙️ Model Selection")
-model_option = st.sidebar.radio(
-    "Select Active Function:",
-    ("Pipeline 1: Essay Scoring (Fine-Tuned)", "Pipeline 2: Writing Coach (Qwen Chat)")
-)
+# --- Main App ---
+st.header("🖊️ AI Essay Grading Assistant")
+st.caption("Designed for Hong Kong Secondary Schools (Output translated for Demo)")
 
-# --- Memory Management ---
-def clear_gpu_memory():
-    """Forces RAM release to prevent Colab crashes."""
-    if "active_pipeline" in st.session_state and st.session_state.active_pipeline:
-        del st.session_state.active_pipeline
-    st.session_state.active_pipeline = None
-    gc.collect()
-    torch.cuda.empty_cache()
+col1, col2 = st.columns([2, 1])
 
-# --- Model Loading Logic ---
-if "current_model_name" not in st.session_state:
-    st.session_state.current_model_name = None
+with col1:
+    st.subheader("Student Submission")
+    genre = st.selectbox(
+        "Select Genre (文體)", 
+        ["Narrative (記叙文)", "Argumentative (議論文)", "Expository (說明文)"]
+    )
+    
+    # Input Tabs
+    tab_text, tab_image = st.tabs(["⌨️ Type / Paste Text", "📷 Upload Handwriting"])
+    
+    essay_text = ""
+    # We use session state to keep the button click 'alive' during processing
+    if "analyze_clicked" not in st.session_state:
+        st.session_state.analyze_clicked = False
 
-# If the user switches the model in the sidebar, we reset the GPU
-if st.session_state.current_model_name != model_option:
-    clear_gpu_memory()
-    st.session_state.current_model_name = model_option
-    st.toast(f"Switched to {model_option}. Memory cleared.", icon="🧹")
+    with tab_text:
+        default_text = """今天天氣真好。我和爸爸媽媽去了公園。公園裡有很多人，有的在跑步，有的在放風箏。我看到了一朵紅色的花，很漂亮。我還吃了一個冰淇淋，是巧克力味的。
+        
+但是，回家的路上，我看到一個人亂扔垃圾。我覺得這是不對的。我們應該愛護環境。如果每個人都亂扔垃圾，地球就會變成垃圾場。雖然我只是一個小學生，但我也要保護地球。"""
+        
+        text_input = st.text_area(
+            "Essay Content (Chinese)", 
+            height=300, 
+            value=default_text,
+            key="text_area"
+        )
+        if st.button("🚀 Analyze Text", type="primary", key="btn_text"):
+            essay_text = text_input
+            st.session_state.analyze_clicked = True
 
-# --- Main App Logic ---
+    with tab_image:
+        st.info("Feature: Optical Character Recognition (OCR) for Handwritten Chinese")
+        uploaded_file = st.file_uploader("Upload an image of the essay", type=['png', 'jpg', 'jpeg'])
+        
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            st.image(image, caption='Student Handwriting', use_container_width=True)
+            
+            if st.button("🔍 Scan & Analyze Image", type="primary"):
+                with st.spinner("Scanning handwriting (Simulated)..."):
+                    time.sleep(2) 
+                    essay_text = default_text 
+                    st.session_state.analyze_clicked = True
+                    st.success("Text extracted successfully!")
+                    with st.expander("View Extracted Text"):
+                        st.write(essay_text)
 
-# 1. Load the selected model only when needed
-if "active_pipeline" not in st.session_state or st.session_state.active_pipeline is None:
-    with st.spinner(f"Loading {model_option}... (This takes ~1 min)"):
+# --- Analysis Logic ---
+if st.session_state.analyze_clicked:
+    # Ensure text is populated if they clicked the button but variable is empty
+    if not essay_text:
+        essay_text = text_input
+
+    if not hf_token:
+        st.error("❌ Error: API Token is missing. Please add it to Streamlit Secrets.")
+    else:
         try:
-            if model_option == "Pipeline 1: Essay Scoring (Fine-Tuned)":
-                # NOTE: If your model is BERT-based (Classification), change "text-generation" to "text-classification"
-                # Assuming it is a generative model based on your previous requests:
-                pipe = pipeline(
-                    "text-generation",
-                    model=MODEL_1_ID,
-                    model_kwargs={"device_map": "auto"},
-                    torch_dtype=torch.float16
-                )
-            else:
-                # Load Qwen Int4
-                pipe = pipeline(
-                    "text-generation",
-                    model=MODEL_2_ID,
-                    model_kwargs={"device_map": "auto", "use_cache": True},
-                    torch_dtype=torch.float16
-                )
-            st.session_state.active_pipeline = pipe
-            st.success("Model Ready!")
-        except Exception as e:
-            st.error(f"Error loading model: {e}")
-            st.stop()
+            # Initialize Pipelines
+            scoring_pipe = ScoringPipeline(hf_token)
+            feedback_pipe = FeedbackPipeline(hf_token)
+            
+            progress_text = "AI is reading the essay..."
+            my_bar = st.progress(0, text=progress_text)
 
-# 2. Chat/Input Interface
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Clear history on model switch to avoid context confusion
-if "history_tracker" not in st.session_state:
-    st.session_state.history_tracker = model_option
-if st.session_state.history_tracker != model_option:
-    st.session_state.messages = []
-    st.session_state.history_tracker = model_option
-
-# Display conversation
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Handle User Input
-input_label = "Paste your essay here..." if "Essay Scoring" in model_option else "Ask your writing coach..."
-if prompt := st.chat_input(input_label):
-    st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
-
-    with st.chat_message("assistant"):
-        with st.spinner("Analyzing..."):
-            try:
-                pipe = st.session_state.active_pipeline
+            # Step 1: Scoring (MirandaZhao Model)
+            my_bar.progress(30, text="Pipeline 1: Scoring with MirandaZhao Model...")
+            scores = scoring_pipe.run(essay_text, genre)
                 
-                if "Qwen" in model_option:
-                    # Qwen Chat Logic
-                    outputs = pipe(
-                        st.session_state.messages,
-                        max_new_tokens=256,
-                        do_sample=True,
-                        temperature=0.7
-                    )
-                    response = outputs[0]["generated_text"][-1]["content"]
-                else:
-                    # Scoring Model Logic
-                    # If it's a generation model, it will generate text.
-                    # If it's a classification model (BERT), this might need adjustment.
-                    outputs = pipe(
-                        prompt,
-                        max_new_tokens=100,
-                        do_sample=True
-                    )
-                    # Handle different output formats
-                    if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
-                        raw_text = outputs[0]["generated_text"]
-                        response = raw_text.replace(prompt, "").strip()
-                    else:
-                        response = str(outputs)
+            if "error" in scores:
+                st.error(f"Error in Scoring Pipeline: {scores['error']}")
+                st.session_state.analyze_clicked = False # Reset
+            else:
+                # Step 2: Feedback (Qwen 2.5 Model)
+                my_bar.progress(70, text="Pipeline 2: Generating Feedback with Qwen 2.5...")
+                feedback = feedback_pipe.run(essay_text, genre, scores)
+                
+                my_bar.progress(100, text="Complete!")
+                time.sleep(1)
+                my_bar.empty()
+                
+                st.success("✅ Analysis Complete!")
+                
+                # --- Result Area ---
+                m1, m2 = st.columns([1, 2])
+                with m1:
+                    st.metric("Total Score", f"{scores.get('holistic_score', 0)} / 100")
+                    st.markdown("### AI Verdict")
+                    st.info(scores.get('brief_comment', "No comment generated."))
+                
+                with m2:
+                    st.markdown("### Dimension Breakdown")
+                    dims = scores.get('dimensions', {})
+                    if dims:
+                        df = pd.DataFrame(dict(
+                            Score=list(dims.values()), 
+                            Dimension=list(dims.keys())
+                        ))
+                        fig = px.line_polar(df, r='Score', theta='Dimension', line_close=True, range_r=[0,100])
+                        fig.update_traces(fill='toself')
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                st.divider()
 
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.subheader("🔍 Specific Corrections")
+                    if "corrections" in feedback:
+                        for item in feedback['corrections']:
+                            with st.expander(f"Issue: ...{item.get('quote', '')[:10]}..."):
+                                st.markdown(f"**Fix:** `{item.get('fix')}`")
+                                st.markdown(f"**Reason:** *{item.get('reason')}*")
+                
+                with c2:
+                    st.subheader("🚀 Strategic Advice")
+                    if "suggestions" in feedback:
+                        # Qwen output might be a long string, handle both list and string
+                        suggs = feedback['suggestions']
+                        if isinstance(suggs, list):
+                            for i, s in enumerate(suggs):
+                                st.info(f"**Coach Tip:**\n{s}")
+                        else:
+                            st.info(suggs)
 
-            except Exception as e:
-                st.error(f"Processing Error: {e}")
-                st.warning("If you see an OOM error, refresh the page to reset GPU memory.")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            
+    # Optional: Reset button state after run to allow re-run
+    # st.session_state.analyze_clicked = False
