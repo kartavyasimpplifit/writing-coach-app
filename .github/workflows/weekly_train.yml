@@ -1,0 +1,36 @@
+name: Weekly AI Retraining
+
+on:
+  # 1. Schedule: Runs at 00:00 UTC every Monday
+  schedule:
+    - cron: '0 0 * * 1'
+  
+  # 2. Manual Trigger: Allows you to click a button to test it anytime
+  workflow_dispatch:
+
+jobs:
+  train_model:
+    runs-on: ubuntu-latest
+    steps:
+      # Step A: Download your code repository
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Step B: Install Python 3.10
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Step C: Install the AI libraries needed for training
+      - name: Install Dependencies
+        run: |
+          pip install pandas torch transformers datasets accelerate huggingface_hub scikit-learn openpyxl
+
+      # Step D: Run your training script
+      # This connects to Hugging Face using your Secret Token
+      - name: Run Training Script
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+        run: |
+          python train.py
