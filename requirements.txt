@@ -1,5 +1,6 @@
 streamlit
 transformers
 torch
-huggingface_hub>=0.23.0
+huggingface_hub
 accelerate
+PyGithub
